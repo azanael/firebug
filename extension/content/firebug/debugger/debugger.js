@@ -5,9 +5,10 @@ define([
     "firebug/lib/object",
     "firebug/lib/locale",
     "firebug/firebug",
+    "firebug/debugger/debuggerHalter",
     "firebug/debugger/debuggerLib",
 ],
-function(FBTrace, Obj, Locale, Firebug, DebuggerLib) {
+function(FBTrace, Obj, Locale, Firebug, DebuggerHalter, DebuggerLib) {
 
 // ********************************************************************************************* //
 // Constants
@@ -216,6 +217,7 @@ Firebug.Debugger = Obj.extend(Firebug.ActivableModule,
 
     breakNow: function(context)
     {
+        DebuggerHalter.breakNow(context);
     },
 
     stop: function(context, frame, type, rv)

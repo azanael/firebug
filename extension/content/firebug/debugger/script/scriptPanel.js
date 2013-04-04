@@ -193,7 +193,7 @@ ScriptPanel.prototype = Obj.extend(BasePanel,
         Trace.sysout("scriptPanel.showStackFrame: " + frame, frame);
 
         if (this.context.breakingCause)
-            this.context.breakingCause.lineNo = lineNo;
+            this.context.breakingCause.lineNo = frame.getLineNumber();
 
         this.navigate(frame.toSourceLink());
     },
@@ -584,11 +584,12 @@ ScriptPanel.prototype = Obj.extend(BasePanel,
         if (!url)
             return;
 
-        var bps = BreakpointStore.getBreakpoints(url);
-        if (!bps || !bps.length)
-            return;
-
-        breakpoints.push.apply(breakpoints, bps);
+        // Get only standard breakpoints. Breakpoints for errors or monitors, etc.
+        // Are not displayed in the breakpoint column.
+        BreakpointStore.enumerateBreakpoints(url, function(bp)
+        {
+            breakpoints.push(bp);
+        });
     },
 
     openBreakpointConditionEditor: function(lineIndex, event)

@@ -13,11 +13,13 @@ define([
     "firebug/lib/options",
     "firebug/lib/wrapper",
     "firebug/lib/xpcom",
+    "firebug/console/errorMessageObj",
+    "firebug/debugger/breakpoints/breakpointStore",
     "firebug/console/profiler",
-    "firebug/chrome/searchBox"
+    "firebug/chrome/searchBox",
 ],
 function(Obj, Firebug, FirebugReps, Locale, Events, Css, Dom, Search, Menu, Options,
-    Wrapper, Xpcom) {
+    Wrapper, Xpcom, ErrorMessageObj, BreakpointStore) {
 
 // ********************************************************************************************* //
 // Constants
@@ -48,7 +50,11 @@ const logTypes =
     "spy": 1
 };
 
+var Trace = FBTrace.to("DBG_CONSOLE");
+var TraceError = FBTrace.to("DBG_ERRORS");
+
 // ********************************************************************************************* //
+// ConsolePanel Implementation
 
 Firebug.ConsolePanel = function () {};
 
@@ -56,6 +62,12 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
 {
     // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
     // Members
+
+    name: "console",
+    searchable: true,
+    breakable: true,
+    editable: false,
+    enableA11y: true,
 
     wasScrolledToBottom: false,
     messageCount: 0,
@@ -65,13 +77,6 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
     order: 10,
 
     // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
-    // extends Panel
-
-    name: "console",
-    searchable: true,
-    breakable: true,
-    editable: false,
-    enableA11y: true,
 
     initialize: function()
     {
@@ -84,6 +89,16 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
             if (this.context.consoleReloadWarning)  // we have not yet injected the console
                 this.insertReloadWarning();
         }
+
+        // Update visibility of stack frame arguments.
+        var name = "showStackFrameArguments";
+        this.updateOption(name, Options.get(name));
+
+        // The Console panel displays error breakpoints and so, its UI must be updated
+        // when a new error-breakpoint is created or removed.
+        BreakpointStore.addListener(this);
+
+        this.context.getTool("debugger").addListener(this);
     },
 
     destroy: function(state)
@@ -105,6 +120,10 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
         if (FBTrace.DBG_CONSOLE)
             FBTrace.sysout("console.destroy; wasScrolledToBottom: " +
                 this.wasScrolledToBottom + ", " + this.context.getName());
+
+        BreakpointStore.removeListener(this);
+
+        this.context.getTool("debugger").removeListener(this);
 
         Firebug.ActivablePanel.destroy.apply(this, arguments);  // must be called last
     },
@@ -211,14 +230,13 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
                 Firebug.Console.onToggleFilter(context, value);
             });
         }
-    },
-
-    shouldBreakOnNext: function()
-    {
-        // xxxHonza: shouldn't the breakOnErrors be context related?
-        // xxxJJB, yes, but we can't support it because we can't yet tell
-        // which window the error is on.
-        return Options.get("breakOnErrors");
+        else if (name == "showStackFrameArguments")
+        {
+            if (value)
+                Css.removeClass(this.panelNode, "hideArguments");
+            else
+                Css.setClass(this.panelNode, "hideArguments");
+        }
     },
 
     getBreakOnNextTooltip: function(enabled)
@@ -361,11 +379,6 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
             [this, text, this.matchSet]);
 
         return true;
-    },
-
-    breakOnNext: function(breaking)
-    {
-        Options.set("breakOnErrors", breaking);
     },
 
     // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
@@ -784,7 +797,102 @@ Firebug.ConsolePanel.prototype = Obj.extend(Firebug.ActivablePanel,
             return false;
 
         return rep.showInfoTip(infoTip, target, x, y);
-    }
+    },
+
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+    // BreakpointStore Listener
+
+    onBreakpointAdded: function(bp)
+    {
+        // The Console panel is only interested in error breakpoints.
+        if (!bp.isError())
+            return;
+
+        Trace.sysout("consolePanel.onBreakpointAdded", bp);
+
+        this.updateErrorBreakpoints(bp, true);
+    },
+
+    onBreakpointRemoved: function(bp)
+    {
+        if (!bp.isError())
+            return;
+
+        Trace.sysout("consolePanel.onBreakpointRemoved", bp);
+
+        this.updateErrorBreakpoints(bp, false);
+    },
+
+    /**
+     * Update Error Breakpoints. Error messages displayed in the Console panel allow
+     * creating/removing a breakpoint. Existence of an error-breakpoint is indicated
+     * by displaying a red circle before the error description.
+     * This method updates the UI if a breakpoint is created/removed.
+     *
+     * @param {Object} bp Breakpoint instance.
+     * @param {Object} isSet If true, an error breakpoint has been added, otherwise false.
+     */
+    updateErrorBreakpoints: function(bp, isSet)
+    {
+        // Iterate all error messages (see firebug/console/errorMessageRep template)
+        // in the Console panel and update associated breakpoint UI.
+        var messages = this.panelNode.getElementsByClassName("objectBox-errorMessage");
+        for (var i=0; i<messages.length; i++)
+        {
+            var message = messages[i];
+
+            // The repObject associated with an error message template should be always
+            // an instance of ErrorMessageObj.
+            var error = Firebug.getRepObject(message);
+            if (!(error instanceof ErrorMessageObj))
+            {
+                TraceError.sysout("consolePanel.updateErrorBreakpoints; ERROR Wrong rep object!");
+                continue;
+            }
+
+            // Errors use real line numbers (1 based) while breakpoints
+            // use zero based numbers.
+            if (error.href == bp.href && error.lineNo - 1 == bp.lineNo)
+            {
+                if (isSet)
+                    Css.setClass(message, "breakForError");
+                else
+                    Css.removeClass(message, "breakForError");
+            }
+        }
+    }, 
+
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+    // DebuggerTool Listener
+
+    onDebuggerPaused: function(context, event, packet)
+    {
+        // The function monitor is only interested in 'breakpoint' type of interrupts.
+        var type = packet.why.type;
+        if (type != "exception")
+            return false;
+
+        // Reset the break-on-next-error flag after an exception break happens.
+        // xxxHonza: this is how the other BON implementations work, but we could reconsider it.
+        this.context.breakOnErrors = false;
+    },
+
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+    // Break On Error
+
+    shouldBreakOnNext: function()
+    {
+        return this.context.breakOnErrors;
+    },
+
+    breakOnNext: function(breaking)
+    {
+        this.context.breakOnErrors = breaking;
+
+        // Set the flag on the server.
+        var tool = this.context.getTool("debugger");
+        tool.breakOnExceptions(this.context, breaking);
+    },
 });
 
 // ********************************************************************************************* //

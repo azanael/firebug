@@ -296,7 +296,14 @@ var DebuggerTool = Obj.extend(Firebug.Module,
         if (this.dispatch2("onDebuggerPaused", [context, event, packet]))
         {
             Trace.sysout("debuggerTool.paused; Listeners want to resume debugger.");
-            this.resume(context);
+
+            // Get resume limit type from the context (doesn't have to be set).
+            var resumeLimit = context.resumeLimit;
+            delete context.resumeLimit;
+
+            // Resume debugger
+            this.resume(context, null, resumeLimit);
+
             return;
         }
 
@@ -405,12 +412,12 @@ var DebuggerTool = Obj.extend(Firebug.Module,
 
     framesadded: function(context)
     {
-        Trace.sysout("debuggerTool.framesadded; ", arguments);
-
         // Get frames from ThreadClient's stack-frame cache and build stack trace object,
         // which is stored in the context.
         var frames = context.activeThread.cachedFrames;
-        context.currentTrace = StackTrace.buildStackTrace(frames, context);
+        Trace.sysout("debuggerTool.framesadded; frames: ", frames);
+
+        context.currentTrace = StackTrace.buildStackTrace(context, frames);
 
         // Now notify all listeners, for example the {@CallstackPanel} panel to sync the UI.
         this.dispatch("framesadded", [context.currentTrace]);
@@ -432,9 +439,11 @@ var DebuggerTool = Obj.extend(Firebug.Module,
     {
         if (!context.activeThread)
         {
-            FBTrace.sysout("debuggerTool.setBreakpoint; Can't set a breakpoint.");
+            TraceError.sysout("debuggerTool.setBreakpoint; ERROR Can't set a breakpoint.");
             return;
         }
+
+        Trace.sysout("debuggerTool.setBreakpoint; " + url + " (" + lineNumber + ")");
 
         var self = this;
         var doSetBreakpoint = function _doSetBreakpoint(response, bpClient)
@@ -615,9 +624,9 @@ var DebuggerTool = Obj.extend(Firebug.Module,
     {
     },
 
-    resume: function(context, callback)
+    resume: function(context, callback, limit)
     {
-        return context.activeThread.resume(callback);
+        return context.activeThread.resume(callback, limit);
     },
 
     stepOver: function(context, callback)
@@ -726,7 +735,10 @@ var DebuggerTool = Obj.extend(Firebug.Module,
 
     breakOnExceptions: function(context, flag)
     {
-        return context.activeThread.pauseOnExceptions(flag);
+        return context.activeThread.pauseOnExceptions(flag, function(response)
+        {
+            Trace.sysout("debuggerTool.breakOnExceptions; Set to " + flag, response);
+        });
     },
 });
 

@@ -29,6 +29,9 @@ var DebuggerLib = {};
 // ********************************************************************************************* //
 // Implementation
 
+// xxxHonza: for now Firebug is accesing JSD2 API directly in some cases, but as soon
+// as RDP is supported the entire DebuggerLib module should be used only on the server side.
+
 /**
  * Unwraps the value of a debuggee object.
  *
@@ -161,6 +164,17 @@ DebuggerLib.getThreadActor = function(context)
 }
 
 // ********************************************************************************************* //
+// Stack Frames
+
+DebuggerLib.getCurrentFrames = function(context)
+{
+    var threadActor = this.getThreadActor(context);
+    var request = {};
+    var response = threadActor.onFrames(request);
+    return response.frames;
+}
+
+// ********************************************************************************************* //
 // Executable Lines
 
 DebuggerLib.getNextExecutableLine = function(context, aLocation)
@@ -201,6 +215,21 @@ DebuggerLib.getNextExecutableLine = function(context, aLocation)
             }
         }
     }
+}
+
+// ********************************************************************************************* //
+// Debugger
+
+DebuggerLib.breakNow = function(context, callback)
+{
+    // getDebugeeGlobal uses the current global (ie. stopped frame, current iframe or
+    // top level window associated with the context object).
+    // There can be cases (e.g. BON XHR) where the current window is an iframe, but
+    // the event the debugger breaks on - comes from top level window (or vice versa).
+    // For now there are not known problems, but we might want to use the second
+    // argument of the getDebuggeeGlobal() and pass explicit global object.
+    var dGlobal = this.getDebuggeeGlobal(context);
+    return dGlobal.evalInGlobal("debugger");
 }
 
 // ********************************************************************************************* //
